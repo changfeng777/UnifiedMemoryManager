@@ -1,3 +1,17 @@
+/******************************************************************************************
+MemoryManager.cpp:
+Copyright (c) Bit Software, Inc.(2015), All rights reserved.
+
+Purpose: 实现统一内存管理接口
+
+Author: xjh
+
+Reviser: yyy
+
+Created Time: 2015-4-26
+******************************************************************************************/
+
+
 #include<stdarg.h>
 #include<string.h>
 #include<memory>

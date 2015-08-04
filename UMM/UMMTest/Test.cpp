@@ -1,8 +1,23 @@
+/******************************************************************************************
+MemoryManager.cpp:
+Copyright (c) Bit Software, Inc.(2015), All rights reserved.
+
+Purpose: 实现命名管道的进程间通信
+
+Author: xjh
+
+Reviser: dongwei
+
+Created Time: 2015-4-26
+******************************************************************************************/
+
 #include <iostream>
 using namespace std;
 
 #include "../UMM/MemoryManager.h"
+#ifdef _WIN32
 #pragma comment(lib, "../Debug/UMM.lib")
+#endif // _WIN32
 
 class CustomType
 {
