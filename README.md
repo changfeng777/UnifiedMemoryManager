@@ -17,7 +17,7 @@
         内存剖析类（剖析内存泄露、内存热点、内存分配情况）
         配置管理类（管理剖析选项）。
 代码UML类图
-![image](https://github.com/changfeng777/UnifiedMemoryManager/raw/master/UMM/UMM.pang) 
+![image](https://github.com/changfeng777/UnifiedMemoryManager/raw/master/UMM/UMM.pang)
 
 ###代码结构：
     UMM/IPC目录下为命名管道的实现代码。
