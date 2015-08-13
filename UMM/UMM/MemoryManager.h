@@ -24,6 +24,7 @@ Created Time: 2015-4-26
 #include <string>
 #include <vector>
 #include <map>
+#include <algorithm>
 
 // C++11
 #include <mutex>
@@ -162,7 +163,6 @@ protected:
 	static void Enable(string& reply);
 	static void Disable(string& reply);
 	static void Save(string& reply);
-	static void Clear(string& reply);
 protected:
 	IPCMonitorServer::IPCMonitorServer();
 
@@ -348,7 +348,7 @@ inline T* _NEW_ARRAY(size_t num, const char* filename, int fileline)
 
 	// 内存分配失败，则直接返回
 	if (ptr == NULL)
-		return;
+		return NULL;
 
 	*(int*)ptr = num;
 	T* retPtr = (T*)((int)ptr + 4);

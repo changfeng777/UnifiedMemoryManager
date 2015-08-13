@@ -164,26 +164,42 @@ void MemoryAnalyse::_OutPutLeakBlockInfo(SaveAdapter& SA)
 
 	//SA.Save(BEGIN_LINE);
 }
+
 void MemoryAnalyse::_OutPutHostObjectInfo(SaveAdapter& SA)
 {
 	//SA.Save(BEGIN_LINE);
 
+	// 对热点信息进行排序的比较器
+	struct CompareHostInfo
+	{
+		bool operator() (MemoryHostMap::iterator lhs, MemoryHostMap::iterator rhs)
+		{
+			return lhs->second._totalSize > rhs->second._totalSize;
+		}
+	};
+	vector<MemoryHostMap::iterator> vHostInofs;
+
 	{
 		unique_lock<mutex> lock(_mutex);
-
-		if (!_hostObjectMap.empty())
-		{
-			SA.Save("\r\n【Memory Host Object Statistics】\r\n");
-		}
-
-		int index = 1;
 		MemoryHostMap::iterator it = _hostObjectMap.begin();
 		for (; it != _hostObjectMap.end(); ++it)
 		{
-			SA.Save("NO%d.\r\n", index++);
-			SA.Save("type:%s , ", it->first.c_str());
-			it->second.Serialize(SA);
+			vHostInofs.push_back(it);
 		}
+	}
+
+	if (!vHostInofs.empty())
+	{
+		SA.Save("\r\n【Memory Host Object Statistics】\r\n");
+	}
+
+	// 对热点类型按分配的大小进行排序，总大小大的排在前面输出
+	sort(vHostInofs.begin(), vHostInofs.end(), CompareHostInfo());	
+	for (int index = 0; index < vHostInofs.size(); ++index)
+	{
+		SA.Save("NO%d.\r\n", index + 1);
+		SA.Save("type:%s , ", vHostInofs[index]->first.c_str());
+		vHostInofs[index]->second.Serialize(SA);
 	}
 
 	//SA.Save(BEGIN_LINE);
@@ -357,7 +373,6 @@ IPCMonitorServer::IPCMonitorServer()
 	_cmdFuncsMap["save"] = Save;
 	_cmdFuncsMap["disable"] = Disable;
 	_cmdFuncsMap["enable"] = Enable;
-	_cmdFuncsMap["clear"] = Clear;
 }
 
 

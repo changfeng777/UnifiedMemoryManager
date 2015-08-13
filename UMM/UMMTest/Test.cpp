@@ -1,12 +1,10 @@
 /******************************************************************************************
-MemoryManager.cpp:
+UMMTest:
 Copyright (c) Bit Software, Inc.(2015), All rights reserved.
 
-Purpose: 实现命名管道的进程间通信
+Purpose: 测试UMM相关接口进行各种测试。
 
 Author: xjh
-
-Reviser: dongwei
 
 Created Time: 2015-4-26
 ******************************************************************************************/
@@ -156,9 +154,9 @@ void Test4()
 int main()
 {
 	//Test1();
-	Test2();
+	//Test2();
 	//Test3();
-	//Test4();
+	Test4();
 
 	return 0;
 }

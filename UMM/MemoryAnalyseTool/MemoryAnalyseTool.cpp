@@ -26,6 +26,9 @@ const char* SERVER_PIPE_NAME = "\\\\.\\Pipe\\ServerPipeName";
 const char* SERVER_PIPE_NAME = "tmp/memory_manager/_fifo";
 #endif
 
+//
+// ≤‚ ‘
+//
 void UsageHelp ()
 {
 	printf ("Memory Analyse Tool. Bit Internal Tool\n");
@@ -43,9 +46,7 @@ void UsageHelpInfo ()
 	printf ("    <state>:   Show the state of the Memory Analyse Tool.\n");
 	printf ("    <enable>:  Force enable Memory Analyse.\n");
 	printf ("    <disable>: Force disable Memory Analyse.\n");
-	printf ("    <print>:   Print the results to the console.\n");
 	printf ("    <save>:    Save the results to file.\n");
-	printf ("    <clear>:   Clear the results.\n");
 }
 
 void MemoryAnalyseClient(const string& idStr)
