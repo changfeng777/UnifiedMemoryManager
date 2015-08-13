@@ -12,10 +12,16 @@ Created Time: 2015-4-26
 #include <iostream>
 using namespace std;
 
-#include "../UMM/MemoryManager.h"
 #ifdef _WIN32
-#pragma comment(lib, "../Debug/UMM.lib")
+	// 解决动态库导出静态变量的问题，UMM中的单例类为静态对象
+	#ifndef IMPORT
+		#define IMPORT
+	#endif // !IMPORT
+
+	#pragma comment(lib, "../Debug/UMM.lib")
 #endif // _WIN32
+
+#include "../UMM/MemoryManager.h"
 
 class CustomType
 {
@@ -154,9 +160,9 @@ void Test4()
 int main()
 {
 	//Test1();
-	//Test2();
+	Test2();
 	//Test3();
-	Test4();
+	//Test4();
 
 	return 0;
 }

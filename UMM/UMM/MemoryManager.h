@@ -34,11 +34,14 @@ using namespace std;
 
 #pragma warning(disable:4996)
 
-#ifdef _WIN32
-#define API_EXPORT _declspec(dllexport)
-#else 
-#define API_EXPORT
-#endif // __WIN32
+// 解决动态库导出静态变量的问题，UMM中的单例类为静态对象
+#if(defined(_WIN32) && defined(IMPORT))
+	#define API_EXPORT _declspec(dllimport)
+#elif _WIN32
+	#define API_EXPORT _declspec(dllexport)
+#else
+	#define API_EXPORT
+#endif
 
 class SaveAdapter;
 class MemoryAnalyse;
@@ -110,24 +113,66 @@ private:
 };
 
 // 单例基类
+//template<class T>
+//class Singleton
+//{
+//public:
+//	static T* GetInstance()
+//	{
+//		return _sInstance;
+//	}
+//protected:
+//	Singleton()
+//	{}
+//
+//	static T* _sInstance;
+//};
+//
+//// 静态对象指针初始化，保证线程安全。 
+//template<class T>
+//T* Singleton<T>::_sInstance = new T();
+
+//
+// 单例对象是静态对象，在内存管理的单例对象构造函数中会启动IPC的消息服务线程。
+// 当编译成动态库时，程序main入口之前就会先加载动态库，而使用上面的方式，这时
+// 就会创建单例对象，这时创建IPC的消息服务线程就会卡死。所以使用下面的单例模式，
+// 在第一获取单例对象时，创建单例对象。
+//
+
+// 单例基类
 template<class T>
 class Singleton
 {
 public:
 	static T* GetInstance()
 	{
+		//
+		// 1.双重检查保障线程安全和效率。
+		//
+		if (_sInstance == NULL)
+		{
+			unique_lock<mutex> lock(_mutex);
+			if (_sInstance == NULL)
+			{
+				_sInstance = new T();
+			}
+		}
+
 		return _sInstance;
 	}
 protected:
 	Singleton()
 	{}
 
-	static T* _sInstance;
+	static T* _sInstance;	// 单实例对象
+	static mutex _mutex;			// 互斥锁对象
 };
 
-// 静态对象指针初始化，保证线程安全。 
 template<class T>
-T* Singleton<T>::_sInstance = new T();
+T* Singleton<T>::_sInstance = NULL;
+
+template<class T>
+mutex Singleton<T>::_mutex;
 
 // 配置选项
 enum ConfigOptions
@@ -289,7 +334,7 @@ private:
 
 	friend class Singleton<MemoryAnalyse>;
 private:
-	mutex			 _mutex;				// 互斥锁对象
+	//mutex			 _mutex;				// 互斥锁对象
 	MemoryLeakMap	 _leakBlockMap;			// 内存泄露块记录
 	MemoryHostMap	 _hostObjectMap;		// 热点对象(以对象类型type为key进行统计)
 	MemoryBlcokInfos _memBlcokInfos;		// 内存块分配记录
