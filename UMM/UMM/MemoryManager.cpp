@@ -11,374 +11,216 @@ Reviser: yyy
 Created Time: 2015-4-26
 ******************************************************************************************/
 
-
-#include<stdarg.h>
-#include<string.h>
-#include<memory>
-#include<assert.h>
-
-// C++11
-//【将C++11相关部分放到CPP中，编译出的UMM库，在不支持C++11的编译器中依旧可以使用】
-#include <mutex>
-#include <thread>
-#include <unordered_map>
-using namespace std;
-
 #include"MemoryManager.h"
 #include"../IPC/IPCManager.h"
-
-// 保存适配器
-class SaveAdapter
-{
-public:
-	virtual int Save(char* format, ...) = 0;
-};
-
-// 控制台保存适配器
-class ConsoleSaveAdapter : public SaveAdapter
-{
-public:
-	virtual int Save(char* format, ...)
-	{
-		va_list argPtr;
-		int cnt;
-
-		va_start(argPtr, format);
-		cnt = vfprintf(stdout, format, argPtr);
-		va_end(argPtr);
-
-		return cnt;
-	}
-};
-
-// 文件保存适配器
-class FileSaveAdapter : public SaveAdapter
-{
-public:
-	FileSaveAdapter(const char* path)
-		:_fOut(0)
-	{
-		_fOut = fopen(path, "w");
-	}
-
-	~FileSaveAdapter()
-	{
-		if (_fOut)
-		{
-			fclose(_fOut);
-		}
-	}
-
-	virtual int Save(char* format, ...)
-	{
-		if (_fOut)
-		{
-			va_list argPtr;
-			int cnt;
-
-			va_start(argPtr, format);
-			cnt = vfprintf(_fOut, format, argPtr);
-			va_end(argPtr);
-
-			return cnt;
-		}
-
-		return 0;
-	}
-private:
-	FileSaveAdapter(const FileSaveAdapter&);
-	FileSaveAdapter& operator==(const FileSaveAdapter&);
-
-private:
-	FILE* _fOut;
-};
 
 ///////////////////////////////////////////////////////////////////////
 // 剖析->【内存泄露分析】【对象热点分析】 【峰值记录】 【内存分配情况】
 // MemoryAnalyse
 
-// 统计计数信息
-struct CountInfo
+// 添加记录
+void MemoryAnalyse::AddRecord(const MemoryBlockInfo& memBlockInfo)
 {
-	int _addCount;		// 添加计数
-	int _delCount;		// 删除计数
+	int flag = ConfigManager::GetInstance()->GetOptions();
+	if (flag == CO_NONE)
+		return;
 
-	long long _totalSize;	// 分配总大小
+	void* ptr = memBlockInfo._ptr;
+	const string& type = memBlockInfo._type;
+	const size_t& size = memBlockInfo._size;
 
-	long long _usedSize;	// 正在使用大小
-	long long _maxPeakSize;	// 最大使用大小(最大峰值)
+	unique_lock<mutex> lock(_mutex);
 
-	CountInfo::CountInfo()
-		: _addCount(0)
-		, _delCount(0)
-		, _totalSize(0)
-		, _usedSize(0)
-		, _maxPeakSize(0)
-	{}
-
-	// 增加计数
-	void CountInfo::AddCount(size_t size)
+	// 更新内存泄露块记录
+	if (flag & CO_ANALYSE_MEMORY_LEAK)
 	{
-		_addCount++;
-		_totalSize += size;
-		_usedSize += size;
-
-		if (_usedSize > _maxPeakSize)
-		{
-			_maxPeakSize = _usedSize;
-		}
+		_leakBlockMap[ptr] = memBlockInfo;
 	}
 
-	// 删除计数
-	void CountInfo::DelCount(size_t size)
+	// 更新内存热点记录
+	if (flag & CO_ANALYSE_MEMORY_HOST)
 	{
-		_delCount++;
-		_usedSize -= size;
+		_hostObjectMap[type].AddCount(memBlockInfo._size);
 	}
-
-	// 序列化统计计数信息到适配器
-	void CountInfo::Serialize(SaveAdapter& SA)
+	// 更新内存块分配信息(内存块记录&分配计数)
+	if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
 	{
-		SA.Save("Alloc Count:%d , Dealloc Count:%d, Alloc Total Size:%lld byte, NonRelease Size:%lld, Max Used Size:%lld\r\n",
-			_addCount, _delCount, _totalSize, _usedSize, _maxPeakSize);
+		_memBlcokInfos.push_back(memBlockInfo);
+
+		_allocCountInfo.AddCount(size);
 	}
+}
 
-};
-
-// 内存剖析
-class MemoryAnalyse : public Singleton<MemoryAnalyse>
+// 删除记录
+void MemoryAnalyse::DelRecord(const MemoryBlockInfo& memBlockInfo)
 {
-	typedef unordered_map<void*, MemoryBlockInfo> MemoryLeakMap;
-	typedef unordered_map<string, CountInfo> MemoryHostMap;
-	//typedef std::map<void*, MemoryBlockInfo> MemoryLeakMap;
-	//typedef std::map<std::string, CountInfo> MemoryHostMap;
-	typedef vector<MemoryBlockInfo> MemoryBlcokInfos;
+	// 获取配置信息
+	int flag = ConfigManager::GetInstance()->GetOptions();
+	if (flag == CO_NONE)
+		return;
 
-public:
-	// 添加记录
-	void AddRecord(const MemoryBlockInfo& memBlockInfo)
+	void* ptr = memBlockInfo._ptr;
+	const string& type = memBlockInfo._type;
+	const size_t& size = memBlockInfo._size;
+
+	unique_lock<mutex> lock(_mutex);
+
+	// 更新内存泄露块记录
+	if (flag & CO_ANALYSE_MEMORY_LEAK)
 	{
-		int flag = ConfigManager::GetInstance()->GetOptions();
-		if (flag == CO_NONE)
-			return;
-
-		void* ptr = memBlockInfo._ptr;
-		const string& type = memBlockInfo._type;
-		const size_t& size = memBlockInfo._size;
-
-		unique_lock<mutex> lock(_mutex);
-
-		// 更新内存泄露块记录
-		if (flag & CO_ANALYSE_MEMORY_LEAK)
+		MemoryLeakMap::iterator it = _leakBlockMap.find(ptr);
+		if (it != _leakBlockMap.end())
 		{
-			_leakBlockMap[ptr] = memBlockInfo;
+			_leakBlockMap.erase(it);
 		}
-
-		// 更新内存热点记录
-		if (flag & CO_ANALYSE_MEMORY_HOST)
+		else
 		{
-			_hostObjectMap[type].AddCount(memBlockInfo._size);
-		}
-		// 更新内存块分配信息(内存块记录&分配计数)
-		if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
-		{
-			_memBlcokInfos.push_back(memBlockInfo);
-
-			_allocCountInfo.AddCount(size);
+			perror("【Leak】Record Memory Block No Match");
 		}
 	}
 
-	// 删除记录
-	void DelRecord(const MemoryBlockInfo& memBlockInfo)
+	// 更新内存热点记录
+	if (flag & CO_ANALYSE_MEMORY_HOST)
 	{
-		// 获取配置信息
-		int flag = ConfigManager::GetInstance()->GetOptions();
-		if (flag == CO_NONE)
-			return;
-
-		void* ptr = memBlockInfo._ptr;
-		const string& type = memBlockInfo._type;
-		const size_t& size = memBlockInfo._size;
-
-		unique_lock<mutex> lock(_mutex);
-
-		// 更新内存泄露块记录
-		if (flag & CO_ANALYSE_MEMORY_LEAK)
+		MemoryHostMap::iterator it = _hostObjectMap.find(type);
+		if (it != _hostObjectMap.end())
 		{
-			MemoryLeakMap::iterator it = _leakBlockMap.find(ptr);
-			if (it != _leakBlockMap.end())
-			{
-				_leakBlockMap.erase(it);
-			}
-			else
-			{
-				perror("【Leak】Record Memory Block No Match");
-			}
+			it->second.DelCount(size);
 		}
-
-		// 更新内存热点记录
-		if (flag & CO_ANALYSE_MEMORY_HOST)
+		else
 		{
-			MemoryHostMap::iterator it = _hostObjectMap.find(type);
-			if (it != _hostObjectMap.end())
-			{
-				it->second.DelCount(size);
-			}
-			else
-			{
-				perror("【host】Record Memory Block No Match");
-			}
-		}
-
-		// 更新内存块分配计数
-		if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
-		{
-			_allocCountInfo.DelCount(memBlockInfo._size);
+			perror("【host】Record Memory Block No Match");
 		}
 	}
 
-	// 保存分析结果到配置的适配器中
-	static void Save()
+	// 更新内存块分配计数
+	if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
 	{
-		int flag = ConfigManager::GetInstance()->GetOptions();
+		_allocCountInfo.DelCount(memBlockInfo._size);
+	}
+}
 
-		if (flag & CO_SAVE_TO_CONSOLE)
-		{
-			ConsoleSaveAdapter CSA;
-			MemoryAnalyse::GetInstance()->OutPut(CSA);
-		}
+// 保存分析结果到配置的适配器中
+void MemoryAnalyse::OutPut()
+{
+	int flag = ConfigManager::GetInstance()->GetOptions();
 
-		if (flag & CO_SAVE_TO_FILE)
-		{
-			const string& path = ConfigManager::GetInstance()->GetOutputPath();
-			FileSaveAdapter FSA(path.c_str());
-			MemoryAnalyse::GetInstance()->OutPut(FSA);
-		}
+	if (flag & CO_SAVE_TO_CONSOLE)
+	{
+		ConsoleSaveAdapter CSA;
+		MemoryAnalyse::GetInstance()->_OutPut(CSA);
 	}
 
-	// 输出剖析结果到对应的配置器
-	void OutPut(SaveAdapter& SA)
+	if (flag & CO_SAVE_TO_FILE)
 	{
-		int flag = ConfigManager::GetInstance()->GetOptions();
+		const string& path = ConfigManager::GetInstance()->GetOutputPath();
+		FileSaveAdapter FSA(path.c_str());
+		MemoryAnalyse::GetInstance()->_OutPut(FSA);
+	}
+}
 
-		SA.Save("---------------------------【Analyse Report】---------------------------\r\n");
+// 输出剖析结果到对应的配置器
+void MemoryAnalyse::_OutPut(SaveAdapter& SA)
+{
+	int flag = ConfigManager::GetInstance()->GetOptions();
 
-		if (flag & CO_ANALYSE_MEMORY_LEAK)
-		{
-			OutPutLeakBlockInfo(SA);
-		}
-		if (flag & CO_ANALYSE_MEMORY_HOST)
-		{
-			OutPutHostObjectInfo(SA);
-		}
-		if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
-		{
-			OutPutAllBlockInfo(SA);
-		}
+	SA.Save("---------------------------【Analyse Report】---------------------------\r\n");
 
-		SA.Save("-----------------------------【   end   】----------------------------\r\n");
+	if (flag & CO_ANALYSE_MEMORY_LEAK)
+	{
+		_OutPutLeakBlockInfo(SA);
+	}
+	if (flag & CO_ANALYSE_MEMORY_HOST)
+	{
+		_OutPutHostObjectInfo(SA);
+	}
+	if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
+	{
+		_OutPutAllBlockInfo(SA);
 	}
 
-	// 清除剖析结果
-	void Clear()
+	SA.Save("-----------------------------【   end   】----------------------------\r\n");
+}
+
+void MemoryAnalyse::_OutPutLeakBlockInfo(SaveAdapter& SA)
+{
+	//SA.Save(BEGIN_LINE);
 	{
 		unique_lock<mutex> lock(_mutex);
 
-		_leakBlockMap.clear();
-		_hostObjectMap.clear();
-		_memBlcokInfos.clear();
-	}
-
-	void OutPutLeakBlockInfo(SaveAdapter& SA)
-	{
-		//SA.Save(BEGIN_LINE);
+		if (!_leakBlockMap.empty())
 		{
-			unique_lock<mutex> lock(_mutex);
-
-			if (!_leakBlockMap.empty())
-			{
-				SA.Save("\r\n【Memory Leak Block Info】\r\n");
-			}
-
-			int index = 1;
-			MemoryLeakMap::iterator it = _leakBlockMap.begin();
-			for (; it != _leakBlockMap.end(); ++it)
-			{
-				SA.Save("NO%d.\r\n", index++);
-				it->second.Serialize(SA);
-			}
+			SA.Save("\r\n【Memory Leak Block Info】\r\n");
 		}
 
-		//SA.Save(BEGIN_LINE);
-	}
-	void OutPutHostObjectInfo(SaveAdapter& SA)
-	{
-		//SA.Save(BEGIN_LINE);
-
+		int index = 1;
+		MemoryLeakMap::iterator it = _leakBlockMap.begin();
+		for (; it != _leakBlockMap.end(); ++it)
 		{
-			unique_lock<mutex> lock(_mutex);
+			SA.Save("NO%d.\r\n", index++);
+			it->second.Serialize(SA);
+		}
+	}
 
-			if (!_hostObjectMap.empty())
-			{
-				SA.Save("\r\n【Memory Host Object Statistics】\r\n");
-			}
+	//SA.Save(BEGIN_LINE);
+}
+void MemoryAnalyse::_OutPutHostObjectInfo(SaveAdapter& SA)
+{
+	//SA.Save(BEGIN_LINE);
 
-			int index = 1;
-			MemoryHostMap::iterator it = _hostObjectMap.begin();
-			for (; it != _hostObjectMap.end(); ++it)
-			{
-				SA.Save("NO%d.\r\n", index++);
-				SA.Save("type:%s , ", it->first.c_str());
-				it->second.Serialize(SA);
-			}
+	{
+		unique_lock<mutex> lock(_mutex);
+
+		if (!_hostObjectMap.empty())
+		{
+			SA.Save("\r\n【Memory Host Object Statistics】\r\n");
 		}
 
-		//SA.Save(BEGIN_LINE);
-	}
-
-	void OutPutAllBlockInfo(SaveAdapter& SA)
-	{
-		if (_memBlcokInfos.empty())
-			return;
-
-		//SA.Save(BEGIN_LINE);
-
+		int index = 1;
+		MemoryHostMap::iterator it = _hostObjectMap.begin();
+		for (; it != _hostObjectMap.end(); ++it)
 		{
-			unique_lock<mutex> lock(_mutex);
-
-			SA.Save("\r\n【Alloc Count Statistics】\r\n");
-			_allocCountInfo.Serialize(SA);
-
-			SA.Save("\r\n【All Memory Blcok Info】\r\n");
-			int index = 1;
-			MemoryBlcokInfos::iterator it = _memBlcokInfos.begin();
-			for (; it != _memBlcokInfos.end(); ++it)
-			{
-				SA.Save("NO%d.\r\n", index++);
-				it->Serialize(SA);
-			}
+			SA.Save("NO%d.\r\n", index++);
+			SA.Save("type:%s , ", it->first.c_str());
+			it->second.Serialize(SA);
 		}
-
-		//SA.Save(BEGIN_LINE);
 	}
 
-private:
-	MemoryAnalyse()
+	//SA.Save(BEGIN_LINE);
+}
+
+void MemoryAnalyse::_OutPutAllBlockInfo(SaveAdapter& SA)
+{
+	if (_memBlcokInfos.empty())
+		return;
+
+	//SA.Save(BEGIN_LINE);
+
 	{
-		atexit(Save);
+		unique_lock<mutex> lock(_mutex);
+
+		SA.Save("\r\n【Alloc Count Statistics】\r\n");
+		_allocCountInfo.Serialize(SA);
+
+		SA.Save("\r\n【All Memory Blcok Info】\r\n");
+		int index = 1;
+		MemoryBlcokInfos::iterator it = _memBlcokInfos.begin();
+		for (; it != _memBlcokInfos.end(); ++it)
+		{
+			SA.Save("NO%d.\r\n", index++);
+			it->Serialize(SA);
+		}
 	}
 
-	friend class Singleton<MemoryAnalyse>;
-private:
-	mutex			 _mutex;				// 互斥锁对象
-	MemoryLeakMap	 _leakBlockMap;			// 内存泄露块记录
-	MemoryHostMap	 _hostObjectMap;		// 热点对象(以对象类型type为key进行统计)
-	MemoryBlcokInfos _memBlcokInfos;		// 内存块分配记录
-	CountInfo		 _allocCountInfo;		// 分配计数记录
-};
+	//SA.Save(BEGIN_LINE);
+}
+
+MemoryAnalyse::MemoryAnalyse()
+{
+	atexit(OutPut);
+}
 
 //////////////////////////////////////////////////////////////////////
-// IPC在线控制监听服务
 // IPCMonitorServer
 
 int GetProcessId()
@@ -410,147 +252,113 @@ string GetServerPipeName()
 	return name;
 }
 
-class IPCMonitorServer : public Singleton<IPCMonitorServer>
+// 启动IPC消息处理服务线程
+void IPCMonitorServer::Start()
+{}
+
+// IPC服务线程处理消息的函数
+void IPCMonitorServer::OnMessage()
 {
-	typedef void(*CmdFunc) (string& reply);
-	typedef map<string, CmdFunc> CmdFuncMap;
+	const int IPC_BUF_LEN = 1024;
+	char msg[IPC_BUF_LEN] = { 0 };
+	IPCServer server(GetServerPipeName().c_str());
 
-public:
-	// 启动IPC消息处理服务线程
-	void IPCMonitorServer::Start()
-	{}
-
-protected:
-	// IPC服务线程处理消息的函数
-	void IPCMonitorServer::OnMessage()
+	while (1)
 	{
-		const int IPC_BUF_LEN = 1024;
-		char msg[IPC_BUF_LEN] = { 0 };
-		IPCServer server(GetServerPipeName().c_str());
+		server.ReceiverMsg(msg, IPC_BUF_LEN);
+		printf("Receiver Cmd Msg: %s\n", msg);
 
-		while (1)
+		string reply;
+		string cmd = msg;
+		CmdFuncMap::iterator it = _cmdFuncsMap.find(cmd);
+		if (it != _cmdFuncsMap.end())
 		{
-			server.ReceiverMsg(msg, IPC_BUF_LEN);
-			printf("Receiver Cmd Msg: %s\n", msg);
-
-			string reply;
-			string cmd = msg;
-			CmdFuncMap::iterator it = _cmdFuncsMap.find(cmd);
-			if (it != _cmdFuncsMap.end())
-			{
-				CmdFunc func = it->second;
-				func(reply);
-			}
-			else
-			{
-				reply = "Invalid Command";
-			}
-
-			server.SendReplyMsg(reply.c_str(), reply.size());
+			CmdFunc func = it->second;
+			func(reply);
 		}
-	}
-
-	//
-	// 以下均为消息处理函数
-	//
-
-	static void GetState(string& reply)
-	{
-		reply += "State:";
-		int flag = ConfigManager::GetInstance()->GetOptions();
-
-		if (flag == CO_NONE)
+		else
 		{
-			reply += "Analyse None\n";
-			return;
+			reply = "Invalid Command";
 		}
 
-		if (flag & CO_ANALYSE_MEMORY_LEAK)
-		{
-			reply += "Analyse Memory Leak\n";
-		}
-
-		if (flag & CO_ANALYSE_MEMORY_HOST)
-		{
-			reply += "Analyse Memory Host\n";
-		}
-
-		if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
-		{
-			reply += "Analyse All Memory Alloc Info\n";
-		}
-
-		if (flag & CO_SAVE_TO_CONSOLE)
-		{
-			reply += "Save To Console\n";
-		}
-
-		if (flag & CO_SAVE_TO_FILE)
-		{
-			reply += "Save To File\n";
-		}
+		server.SendReplyMsg(reply.c_str(), reply.size());
 	}
+}
 
-	static void Enable(string& reply)
+void IPCMonitorServer::GetState(string& reply)
+{
+	reply += "State:";
+	int flag = ConfigManager::GetInstance()->GetOptions();
+
+	if (flag == CO_NONE)
 	{
-		ConfigManager::GetInstance()->SetOptions(CO_ANALYSE_MEMORY_HOST
-			| CO_ANALYSE_MEMORY_LEAK
-			| CO_ANALYSE_MEMORY_ALLOC_INFO
-			| CO_SAVE_TO_FILE);
-
-		reply += "Enable Success";
+		reply += "Analyse None\n";
+		return;
 	}
 
-	static void Disable(string& reply)
+	if (flag & CO_ANALYSE_MEMORY_LEAK)
 	{
-		ConfigManager::GetInstance()->SetOptions(CO_NONE);
-
-		reply += "Disable Success";
+		reply += "Analyse Memory Leak\n";
 	}
 
-	static void Save(string& reply)
+	if (flag & CO_ANALYSE_MEMORY_HOST)
 	{
-		const string& path = ConfigManager::GetInstance()->GetOutputPath();
-		FileSaveAdapter FSA(path.c_str());
-		MemoryAnalyse::GetInstance()->OutPut(FSA);
-
-		reply += "Save Success";
+		reply += "Analyse Memory Host\n";
 	}
 
-	static void Print(string& reply)
+	if (flag & CO_ANALYSE_MEMORY_ALLOC_INFO)
 	{
-		// 这里应该把将剖析信息发回给管道客户端？
-		ConsoleSaveAdapter CSA;
-		MemoryAnalyse::GetInstance()->OutPut(CSA);
-
-		reply += "Print Success";
+		reply += "Analyse All Memory Alloc Info\n";
 	}
 
-	static void Clear(string& reply)
+	if (flag & CO_SAVE_TO_CONSOLE)
 	{
-		MemoryAnalyse::GetInstance()->Clear();
-
-		reply += "Clear Success";
+		reply += "Save To Console\n";
 	}
-protected:
-	IPCMonitorServer::IPCMonitorServer()
-		:_onMsgThread(&IPCMonitorServer::OnMessage, this)
+
+	if (flag & CO_SAVE_TO_FILE)
 	{
-		printf("%s IPC Monitor Server Start\n", GetServerPipeName().c_str());
-
-		_cmdFuncsMap["state"] = GetState;
-		_cmdFuncsMap["save"] = Save;
-		_cmdFuncsMap["print"] = Print;
-		_cmdFuncsMap["disable"] = Disable;
-		_cmdFuncsMap["enable"] = Enable;
-		_cmdFuncsMap["clear"] = Clear;
+		reply += "Save To File\n";
 	}
+}
 
-	friend class Singleton<IPCMonitorServer>;
-private:
-	thread	_onMsgThread;			// 处理消息线程
-	CmdFuncMap _cmdFuncsMap;		// 消息命令到执行函数的映射表
-};
+void IPCMonitorServer::Enable(string& reply)
+{
+	ConfigManager::GetInstance()->SetOptions(CO_ANALYSE_MEMORY_HOST
+		| CO_ANALYSE_MEMORY_LEAK
+		| CO_ANALYSE_MEMORY_ALLOC_INFO
+		| CO_SAVE_TO_FILE);
+
+	reply += "Enable Success";
+}
+
+void IPCMonitorServer::Disable(string& reply)
+{
+	ConfigManager::GetInstance()->SetOptions(CO_NONE);
+
+	reply += "Disable Success";
+}
+
+void IPCMonitorServer::Save(string& reply)
+{
+	const string& path = ConfigManager::GetInstance()->GetOutputPath();
+	FileSaveAdapter FSA(path.c_str());
+	MemoryAnalyse::GetInstance()->_OutPut(FSA);
+
+	reply += "Save Success";
+}
+
+IPCMonitorServer::IPCMonitorServer()
+	:_onMsgThread(&IPCMonitorServer::OnMessage, this)
+{
+	printf("%s IPC Monitor Server Start\n", GetServerPipeName().c_str());
+
+	_cmdFuncsMap["state"] = GetState;
+	_cmdFuncsMap["save"] = Save;
+	_cmdFuncsMap["disable"] = Disable;
+	_cmdFuncsMap["enable"] = Enable;
+	_cmdFuncsMap["clear"] = Clear;
+}
 
 
 ////////////////////////////////////////////////////////////
